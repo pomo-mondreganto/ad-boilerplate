@@ -4,13 +4,13 @@ python:
   - "3.7"
 
 env:
-  - DOCKER_COMPOSE_VERSION=1.25.0 RUNS=10  SERVICE=<your first service>
-#  - DOCKER_COMPOSE_VERSION=1.25.0 RUNS=10  SERVICE=<your second service>
+  - DOCKER_COMPOSE_VERSION=1.27.4 RUNS=10  SERVICE=<your first service>
+#  - DOCKER_COMPOSE_VERSION=1.27.4 RUNS=10  SERVICE=<your second service>
   
-  - DOCKER_COMPOSE_VERSION=1.25.0 RUNS=20  SERVICE=all
+  - DOCKER_COMPOSE_VERSION=1.27.4 RUNS=20  SERVICE=all
 
-  - DOCKER_COMPOSE_VERSION=1.25.0 RUNS=200  SERVICE=<your first service>
-#  - DOCKER_COMPOSE_VERSION=1.25.0 RUNS=200  SERVICE=<your second service>
+  - DOCKER_COMPOSE_VERSION=1.27.4 RUNS=200  SERVICE=<your first service>
+#  - DOCKER_COMPOSE_VERSION=1.27.4 RUNS=200  SERVICE=<your second service>
 
 services:
   - docker
@@ -24,19 +24,21 @@ before_install:
 install:
   - sudo apt-get update
   - sudo apt-get install python3 python3-pip python3-dev git libssl-dev libffi-dev build-essential
+  - pip install -r requirements.txt
   - pip install -r checkers/requirements.txt
-  - export SERVICES="$(ls services | xargs)"
-  - 'echo "Found services: $SERVICES"'
-  - ./start.sh "$SERVICE"
+  - ./check.py list
+  - ./check.py validate
+  - ./check.py up
 
 before_script:
-  - sleep 60
+  - sleep 30
 
 script:
-  - ./check.sh "$SERVICE"
+  - ./check.py check
 
 after_script:
-  - ./stop.sh
+  - ./check.py down
 
 after_failure:
-  - ./logs.sh
+  - ./check.py logs
+
