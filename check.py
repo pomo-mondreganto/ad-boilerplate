@@ -52,6 +52,17 @@ CLEANERS = ['dedcleaner']
 
 VALIDATE_DIRS = ['checkers', 'services', 'internal', 'sploits']
 
+ALLOWED_CHECKER_PATTERNS = [
+    "import requests",
+    "requests.exceptions",
+    "s: requests.Session",
+    "sess: requests.Session",
+    "session: requests.Session",
+    "Got requests connection error",
+]
+FORBIDDEN_CHECKER_PATTERNS = [
+    "requests"
+]
 
 class ColorType(Enum):
     INFO = '\033[92m'
@@ -259,7 +270,9 @@ class StructureValidator(BaseValidator):
         self._service = service
 
     def _error(self, cond, message):
-        self._was_error |= super()._error(cond, message)
+        err = super()._error(cond, message)
+        self._was_error |= err
+        return err
 
     def validate(self):
         for d in VALIDATE_DIRS:
@@ -284,10 +297,22 @@ class StructureValidator(BaseValidator):
             with f.open() as file:
                 dc = yaml.safe_load(file)
 
-            for opt in DC_REQUIRED_OPTIONS:
-                self._error(opt in dc, f'required option {opt} not in {path}')
+            if self._error(isinstance(dc, dict), f'{path} is not dict'):
+                return
 
-            dc_version = float(dc['version'])
+            for opt in DC_REQUIRED_OPTIONS:
+                if self._error(opt in dc, f'required option {opt} not in {path}'):
+                    return
+
+            if self._error(isinstance(dc['version'], str), f'version option in {path} is not string'):
+                return
+
+            try:
+                dc_version = float(dc['version'])
+            except ValueError:
+                self._error(False, f'version option in {path} is not float')
+                return
+
             self._error(
                 2.4 <= dc_version < 3,
                 f'invalid version in {path}, need >=2.4 and <3, got {dc_version}',
@@ -304,12 +329,20 @@ class StructureValidator(BaseValidator):
             proxies = []
             dependencies = defaultdict(list)
 
+            if self._error(isinstance(dc['services'], dict), f'services option in {path} is not dict'):
+                return
+
             for container, container_conf in dc['services'].items():
+                if self._error(isinstance(container_conf, dict), f'config in {path} for container {container} is not dict'):
+                    continue
+
                 for opt in CONTAINER_REQUIRED_OPTIONS:
                     self._error(
                         opt in container_conf,
                         f'required option {opt} not in {path} for container {container}',
                     )
+
+                self._error('restart' in container_conf and container_conf['restart'] == 'unless-stopped', f'restart option in {path} for container {container} must be equal to "unless-stopped"')
 
                 for opt in container_conf:
                     self._error(
@@ -320,6 +353,11 @@ class StructureValidator(BaseValidator):
                 if self._error(
                         'image' not in container_conf or 'build' not in container_conf,
                         f'both image and build options in {path} for container {container}'):
+                    continue
+
+                if self._error(
+                        'image' in container_conf or 'build' in container_conf,
+                        f'both image and build options not in {path} for container {container}'):
                     continue
 
                 if 'image' in container_conf:
@@ -335,9 +373,15 @@ class StructureValidator(BaseValidator):
                         else:
                             dockerfile = f.parent / context / 'Dockerfile'
 
+                    if self._error(dockerfile.exists(), f'no dockerfile found in {dockerfile}'):
+                        continue
+
                     with dockerfile.open() as file:
                         dfp = DockerfileParser(fileobj=file)
                         image = dfp.baseimage
+
+                    if self._error(image is not None, f'no image option in {dockerfile}'):
+                        continue
 
                 if 'depends_on' in container_conf:
                     for dependency in container_conf['depends_on']:
@@ -361,35 +405,42 @@ class StructureValidator(BaseValidator):
                 if is_service:
                     services.append(container)
                     for opt in SERVICE_REQUIRED_OPTIONS:
-                        self._warning(
+                        self._error(
                             opt in container_conf,
                             f'required option {opt} not in {path} for service {container}',
                         )
 
                     for opt in container_conf:
-                        self._warning(
+                        self._error(
                             opt in SERVICE_ALLOWED_OPTIONS,
                             f'option {opt} in {path} is not allowed for service {container}',
                         )
 
             for service in services:
                 for database in databases:
-                    self._warning(
+                    self._error(
                         service in dependencies and database in dependencies[service],
                         f'service {service} may need to depends_on database {database}')
 
             for proxy in proxies:
                 for service in services:
-                    self._warning(
+                    self._error(
                         proxy in dependencies and service in dependencies[proxy],
                         f'proxy {proxy} may need to depends_on service {service}')
 
+        elif BASE_DIR / "checkers" in f.parents and f.suffix == ".py":
+            checker_code = f.read_text()
+            for p in ALLOWED_CHECKER_PATTERNS:
+                checker_code = checker_code.replace(p, "")
+            for p in FORBIDDEN_CHECKER_PATTERNS:
+                self._error(p not in checker_code, f'forbidden pattern "{p}" in {path}')
+
     def __str__(self):
-        return f'structure validator {self._service.name}'
+        return f'Structure validator for {self._service.name}'
 
 
 def get_services() -> List[Service]:
-    if os.getenv('SERVICE') == 'all':
+    if os.getenv('SERVICE') in ['all', None]:
         result = list(
             Service(service_path.name) for service_path in SERVICES_PATH.iterdir()
             if service_path.name[0] != '.' and service_path.is_dir()
@@ -435,7 +486,7 @@ def validate_structure(_args):
 
     if was_error:
         with OUT_LOCK:
-            colored_log('structure validator: failed', color=ColorType.FAIL)
+            colored_log('Structure validator: failed', color=ColorType.FAIL)
             raise AssertionError
 
 
@@ -510,11 +561,16 @@ if __name__ == '__main__':
     dump_parser.set_defaults(func=dump_tasks)
 
     parsed = parser.parse_args()
+
+    if "func" not in parsed:
+        print("Type -h")
+        exit(1)
+
     try:
         parsed.func(parsed)
     except AssertionError:
         exit(1)
     except Exception as e:
         tb = traceback.format_exc()
-        print('Got exception:', e, tb)
+        print('Got exception, report it:', e, tb)
         exit(1)
