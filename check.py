@@ -503,7 +503,7 @@ def dump_tasks(_args):
             'checker': f'{service.name}/checker.py',
             'checker_timeout': info['timeout'],
             'checker_type': checker_type,
-            'places': info['timeout'],
+            'places': info['vulns'],
             'puts': 1,
             'gets': 1,
         })
